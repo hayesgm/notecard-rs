@@ -159,6 +159,38 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
         self.note.request(delay, req::DFU::new(name, on, stop)).await?;
         Ok(FutureResponse::from(self.note))
     }
+
+    /// Configure ATTN pin behavior for interrupt-driven notifications
+    pub async fn attn(
+        self,
+        delay: &mut impl DelayNs,
+        mode: Option<&str>,
+        files: Option<&[&str]>,
+        seconds: Option<u32>,
+    ) -> Result<FutureResponse<'a, res::Attn, IOM, BS>, NoteError> {
+        // Convert files array to heapless Vec if provided
+        let files_vec = if let Some(f) = files {
+            let mut vec: heapless::Vec<heapless::String<20>, 8> = heapless::Vec::new();
+            for file in f {
+                vec.push(heapless::String::try_from(*file).map_err(|_| NoteError::BufOverflow)?)
+                    .map_err(|_| NoteError::BufOverflow)?;
+            }
+            Some(vec)
+        } else {
+            None
+        };
+
+        self.note.request(
+            delay,
+            req::Attn {
+                req: "card.attn",
+                mode: str_string(mode)?,
+                files: files_vec,
+                seconds,
+            },
+        ).await?;
+        Ok(FutureResponse::from(self.note))
+    }
 }
 
 pub mod req {
@@ -282,6 +314,20 @@ pub mod req {
             }
         }
     }
+
+    #[derive(Deserialize, Serialize, defmt::Format, Default)]
+    pub struct Attn {
+        pub req: &'static str,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub mode: Option<heapless::String<40>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub files: Option<heapless::Vec<heapless::String<20>, 8>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub seconds: Option<u32>,
+    }
 }
 
 pub mod res {
@@ -398,6 +444,18 @@ pub mod res {
     #[derive(Deserialize, defmt::Format)]
     pub struct DFU {
         pub name: req::DFUName,
+    }
+
+    #[derive(Deserialize, defmt::Format)]
+    pub struct Attn {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub mode: Option<heapless::String<40>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub files: Option<heapless::Vec<heapless::String<20>, 8>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub seconds: Option<u32>,
     }
 }
 
