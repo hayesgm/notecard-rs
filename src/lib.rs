@@ -116,7 +116,7 @@ impl NoteError {
         NoteError::DeserError(s)
     }
 
-    pub fn string_err(_e: ()) -> NoteError {
+    pub fn string_err(_e: heapless::CapacityError) -> NoteError {
         NoteError::BufOverflow
     }
 }
