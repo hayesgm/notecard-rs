@@ -1,16 +1,16 @@
 [package]
 name = "blues-notecard"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
-authors = [ "Gaute Hope <eg@gaute.vetsj.com>" ]
+authors = [ "Gaute Hope <eg@gaute.vetsj.com>", "Geoffrey Hayes <hayesgm@gmail.com>" ]
 license = "MIT"
 description = "A driver for the Blues.io Notecard"
-repository = "https://github.com/gauteh/notecard-rs"
+repository = "https://github.com/hayesgm/notecard-rs"
 
 [dependencies]
 defmt = "0.3"
 embedded-hal-async = "1.0.0"
-heapless = { version = "0.7", features = [ "serde", "ufmt-impl", "defmt-impl" ] }
+heapless = { version = "0.8", features = [ "serde", "defmt-03" ] }
 serde = { version = "1", features = ["derive"], default-features = false }
 serde-json-core = "0.5.1"
 
