@@ -191,6 +191,80 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
         ).await?;
         Ok(FutureResponse::from(self.note))
     }
+
+    /// Get binary buffer status
+    /// Returns information about the binary storage area including max size and current length
+    pub async fn binary(
+        self,
+        delay: &mut impl DelayNs,
+    ) -> Result<FutureResponse<'a, res::Binary, IOM, BS>, NoteError> {
+        self.note.request_raw(delay, b"{\"req\":\"card.binary\"}\n").await?;
+        Ok(FutureResponse::from(self.note))
+    }
+
+    /// Write COBS-encoded binary data to the Notecard's binary storage buffer
+    ///
+    /// # Arguments
+    /// * `cobs_data` - The COBS-encoded data to write
+    /// * `offset` - Byte offset in the buffer to start writing (0-based)
+    ///
+    /// Note: The data must already be COBS-encoded before calling this function
+    pub async fn binary_put(
+        self,
+        delay: &mut impl DelayNs,
+        cobs_data: &[u8],
+        offset: usize,
+    ) -> Result<FutureResponse<'a, res::Empty, IOM, BS>, NoteError> {
+        // Send JSON request first
+        self.note.request(
+            delay,
+            req::BinaryPut {
+                req: "card.binary.put",
+                cobs: cobs_data.len(),
+                offset: Some(offset),
+            },
+        ).await?;
+
+        // Immediately follow with binary data (no newline!)
+        self.note.i2c.write(self.note.addr, cobs_data)
+            .await
+            .map_err(|_| NoteError::I2cWriteError)?;
+
+        Ok(FutureResponse::from(self.note))
+    }
+
+    /// Read COBS-encoded binary data from the Notecard's binary storage buffer
+    ///
+    /// # Arguments
+    /// * `offset` - Byte offset in the buffer to start reading (0-based)
+    /// * `length` - Number of bytes to read
+    ///
+    /// Returns the COBS-encoded data which must be decoded by the caller
+    pub async fn binary_get(
+        self,
+        delay: &mut impl DelayNs,
+        offset: usize,
+        length: usize,
+    ) -> Result<heapless::Vec<u8, 66000>, NoteError> {
+        // Send request
+        self.note.request(
+            delay,
+            req::BinaryGet {
+                req: "card.binary.get",
+                offset: Some(offset),
+                length: Some(length),
+            },
+        ).await?;
+
+        // Read binary response
+        let mut buffer = heapless::Vec::new();
+        buffer.resize(length, 0).map_err(|_| NoteError::BufOverflow)?;
+        self.note.i2c.read(self.note.addr, &mut buffer)
+            .await
+            .map_err(|_| NoteError::I2cReadError)?;
+
+        Ok(buffer)
+    }
 }
 
 pub mod req {
@@ -328,6 +402,28 @@ pub mod req {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub seconds: Option<u32>,
     }
+
+    #[derive(Deserialize, Serialize, defmt::Format, Default)]
+    pub struct BinaryPut {
+        pub req: &'static str,
+
+        /// Size of COBS-encoded data to write
+        pub cobs: usize,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub offset: Option<usize>,
+    }
+
+    #[derive(Deserialize, Serialize, defmt::Format, Default)]
+    pub struct BinaryGet {
+        pub req: &'static str,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub offset: Option<usize>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub length: Option<usize>,
+    }
 }
 
 pub mod res {
@@ -335,6 +431,16 @@ pub mod res {
 
     #[derive(Deserialize, defmt::Format)]
     pub struct Empty {}
+
+    #[derive(Deserialize, defmt::Format)]
+    pub struct Binary {
+        /// Current length of data stored in binary buffer
+        pub length: Option<usize>,
+        /// Maximum capacity of binary buffer
+        pub max: Option<usize>,
+        /// CRC32 of current binary buffer contents
+        pub crc: Option<heapless::String<20>>,
+    }
 
     #[derive(Deserialize, defmt::Format)]
     pub struct LocationTrack {

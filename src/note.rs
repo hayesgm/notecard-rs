@@ -55,6 +55,30 @@ impl<'a, IOM: I2c, const BS: usize> Note<'a, IOM, BS> {
         Ok(FutureResponse::from(self.note))
     }
 
+    /// Adds a note with binary data attachment (references data in Notecard's binary buffer)
+    /// The binary data must first be written to the buffer using card.binary.put()
+    pub async fn add_binary(
+        self,
+        delay: &mut impl DelayNs,
+        file: Option<&str>,
+        note: Option<&str>,
+        length: usize,
+        sync: bool,
+    ) -> Result<FutureResponse<'a, res::Add, IOM, BS>, NoteError> {
+        self.note.request(
+            delay,
+            req::AddBinary {
+                req: "note.add",
+                file: str_string(file)?,
+                note: str_string(note)?,
+                binary: true,
+                length,
+                sync: Some(sync),
+            },
+        ).await?;
+        Ok(FutureResponse::from(self.note))
+    }
+
     /// Updates a Note in a DB Notefile by its ID, replacing the existing body and/or payload.
     pub async fn update<T: Serialize + Default>(
         self,
@@ -202,6 +226,23 @@ mod req {
         pub verify: Option<bool>,
     }
 
+    #[derive(Deserialize, Serialize)]
+    pub struct AddBinary {
+        pub req: &'static str,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub file: Option<heapless::String<20>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub note: Option<heapless::String<20>>,
+
+        pub binary: bool,
+        pub length: usize,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub sync: Option<bool>,
+    }
+
     #[derive(Deserialize, Serialize, Default)]
     pub struct Update<'a, T: Serialize + Default> {
         pub req: &'static str,
@@ -280,6 +321,9 @@ pub mod res {
 
         #[serde(skip_serializing_if = "Option::is_none")]
         pub time: Option<u32>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub binary: Option<bool>,
     }
 
     #[derive(Deserialize, defmt::Format)]
