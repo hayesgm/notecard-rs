@@ -615,8 +615,16 @@ impl<
             }
             Some(body) => {
                 trace!("response is regular, parsing..");
+
+                // Handle empty responses (just whitespace) as empty JSON object "{}"
+                let body_to_parse = if body.iter().all(|&b| b.is_ascii_whitespace()) {
+                    b"{}"
+                } else {
+                    body
+                };
+
                 Ok(Some(
-                    serde_json_core::from_slice::<T>(body)
+                    serde_json_core::from_slice::<T>(body_to_parse)
                         .map_err(|_| {
                             error!(
                                 "failed to deserialize: {}",
