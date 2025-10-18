@@ -233,37 +233,47 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
 
         debug!("card.binary.put acknowledged, writing {} bytes + newline...", cobs_data.len());
 
-        // Binary data ALSO uses Serial-over-I2C protocol (length-prefixed chunks)!
-        // Per note-c: even _I2CTransmit for binary data adds length prefix
-        // Chunk size is I2C max minus 1 byte for length prefix
-        // NOTE_I2C_MAX_MAX = UCHAR_MAX - NOTE_I2C_HEADER_SIZE = 255 - 2 = 253
+        // Per note-c: Append newline to COBS data before chunking (line 634: encodedData[encLen] = '\n')
+        // Then chunk and transmit using Serial-over-I2C protocol with NO delays (delay=false)
+        // Chunk size: NOTE_I2C_MAX_MAX = UCHAR_MAX - NOTE_I2C_HEADER_SIZE = 255 - 2 = 253
         const CHUNK_SIZE: usize = 253;
 
+        // Create slice of [cobs_data, '\n'] without copying to heap
+        // We'll iterate over cobs_data chunks, then send newline in final chunk
+        let total_len = cobs_data.len() + 1;
+        let mut remaining = cobs_data;
         let mut bytes_sent = 0;
-        let total_len = cobs_data.len() + 1;  // +1 for newline
 
-        // Send all chunks of COBS data using Serial-over-I2C protocol (with length prefix)
-        for chunk in cobs_data.chunks(CHUNK_SIZE) {
-            // Prepare buffer with length prefix: [length_byte][data]
+        // Send full chunks of COBS data
+        while remaining.len() > CHUNK_SIZE {
+            let (chunk, rest) = remaining.split_at(CHUNK_SIZE);
+            remaining = rest;
+
+            // Prepare Serial-over-I2C chunk: [length_byte][data]
             let mut write_buf = heapless::Vec::<u8, 254>::new();
-            write_buf.push(chunk.len() as u8).map_err(|_| NoteError::BufOverflow)?;
+            write_buf.push(CHUNK_SIZE as u8).map_err(|_| NoteError::BufOverflow)?;
             write_buf.extend_from_slice(chunk).map_err(|_| NoteError::BufOverflow)?;
 
-            // Write with Serial-over-I2C protocol
+            // Write with NO delay (per note-c: delay=false for binary)
             self.note.i2c.write(self.note.addr, &write_buf).await
                 .map_err(|_| {
                     error!("Binary write failed at offset {}", bytes_sent);
                     NoteError::I2cWriteError
                 })?;
 
-            bytes_sent += chunk.len();
+            bytes_sent += CHUNK_SIZE;
         }
 
-        // Send the final newline as a separate chunk with length prefix
-        let newline_chunk = [1u8, b'\n'];  // [length=1, '\n']
-        self.note.i2c.write(self.note.addr, &newline_chunk).await
+        // Send final chunk with remaining COBS data + newline
+        let final_chunk_len = remaining.len() + 1;  // +1 for '\n'
+        let mut write_buf = heapless::Vec::<u8, 254>::new();
+        write_buf.push(final_chunk_len as u8).map_err(|_| NoteError::BufOverflow)?;
+        write_buf.extend_from_slice(remaining).map_err(|_| NoteError::BufOverflow)?;
+        write_buf.push(b'\n').map_err(|_| NoteError::BufOverflow)?;
+
+        self.note.i2c.write(self.note.addr, &write_buf).await
             .map_err(|_| {
-                error!("Failed to write binary terminator newline");
+                error!("Failed to write final binary chunk with newline");
                 NoteError::I2cWriteError
             })?;
 
