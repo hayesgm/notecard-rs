@@ -231,17 +231,19 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
             .wait(delay)
             .await?;
 
-        debug!("card.binary.put acknowledged, writing {} bytes (raw binary protocol)...", cobs_data.len());
+        debug!("card.binary.put acknowledged, writing {} bytes + newline (raw binary protocol)...", cobs_data.len());
 
         // Binary data uses RAW I2C writes (no Serial-over-I2C length prefix!)
         // Per note-c implementation: chunk to I2C MTU size with NO delays
+        // IMPORTANT: Binary data must end with '\n' to mark end of packet
         // NOTE_I2C_MAX_MAX = UCHAR_MAX - NOTE_I2C_HEADER_SIZE = 255 - 2 = 253
         const CHUNK_SIZE: usize = 253;
 
         let mut bytes_sent = 0;
+        let total_with_newline = cobs_data.len() + 1;  // +1 for '\n'
 
+        // Send all chunks of COBS data
         for chunk in cobs_data.chunks(CHUNK_SIZE) {
-            // Raw I2C write - NO length prefix, NO delays
             self.note.i2c.write(self.note.addr, chunk).await
                 .map_err(|_| {
                     error!("Binary write failed at offset {}", bytes_sent);
@@ -251,8 +253,16 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
             bytes_sent += chunk.len();
         }
 
-        debug!("Binary data write complete: {} bytes in {} chunks",
-            bytes_sent, (cobs_data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE);
+        // Send the final newline to mark end of packet
+        self.note.i2c.write(self.note.addr, &[b'\n']).await
+            .map_err(|_| {
+                error!("Failed to write binary terminator newline");
+                NoteError::I2cWriteError
+            })?;
+
+        debug!("Binary data write complete: {} bytes ({} + newline) in {} chunks",
+            total_with_newline, cobs_data.len(),
+            (cobs_data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE + 1);
         Ok(())
     }
 
