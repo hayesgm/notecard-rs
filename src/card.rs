@@ -214,42 +214,57 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
         mut self,
         delay: &mut impl DelayNs,
         cobs_data: &[u8],
-        offset: usize,
+        base_offset: usize,
     ) -> Result<(), NoteError> {
-        // Send JSON request
-        self.note.request(
-            delay,
-            req::BinaryPut {
-                req: "card.binary.put",
-                cobs: cobs_data.len(),
-                offset: Some(offset),
-            },
-        ).await?;
+        // Fragment large binary data to avoid overwhelming Notecard's I2C receiver buffer.
+        // The Notecard API is designed for fragmentation - the 'offset' parameter is
+        // "primarily used when sending multiple fragments of one binary payload."
+        const FRAGMENT_SIZE: usize = 2048;  // 2KB fragments
 
-        // Wait for the Notecard to acknowledge the request
-        FutureResponse::<res::Empty, _, _>::from(&mut *self.note)
-            .wait(delay)
-            .await?;
+        let total_len = cobs_data.len();
+        let mut fragment_offset = 0;
 
-        debug!("card.binary.put acknowledged, writing {} bytes of COBS data...", cobs_data.len());
+        debug!("Fragmenting {} bytes into {} byte chunks...", total_len, FRAGMENT_SIZE);
 
-        // Give Notecard a moment to prepare its buffer for the incoming data
-        // (empirically needed - immediate write after ack can cause timeouts)
-        delay.delay_ms(10).await;
+        while fragment_offset < total_len {
+            let remaining = total_len - fragment_offset;
+            let fragment_len = remaining.min(FRAGMENT_SIZE);
+            let fragment = &cobs_data[fragment_offset..fragment_offset + fragment_len];
+            let notecard_offset = base_offset + fragment_offset;
 
-        // Now write the binary data after Notecard acknowledged
-        let write_result = self.note.i2c.write(self.note.addr, cobs_data).await;
+            debug!("Fragment: offset={}, size={}", notecard_offset, fragment_len);
 
-        match write_result {
-            Ok(_) => {
-                debug!("Binary data write completed successfully");
-                Ok(())
-            }
-            Err(e) => {
-                error!("Binary data write failed after {} bytes (timeout or NAK)", cobs_data.len());
-                Err(NoteError::I2cWriteError)
-            }
+            // Send card.binary.put for this fragment
+            self.note.request(
+                delay,
+                req::BinaryPut {
+                    req: "card.binary.put",
+                    cobs: fragment_len,
+                    offset: Some(notecard_offset),
+                },
+            ).await?;
+
+            // Wait for ack
+            FutureResponse::<res::Empty, _, _>::from(&mut *self.note)
+                .wait(delay)
+                .await?;
+
+            // Small delay for Notecard to prepare buffer
+            delay.delay_ms(5).await;
+
+            // Write this fragment's data
+            self.note.i2c.write(self.note.addr, fragment).await
+                .map_err(|_| {
+                    error!("Fragment write failed at offset {}", notecard_offset);
+                    NoteError::I2cWriteError
+                })?;
+
+            fragment_offset += fragment_len;
         }
+
+        debug!("Binary data transfer complete: {} bytes in {} fragments",
+            total_len, (total_len + FRAGMENT_SIZE - 1) / FRAGMENT_SIZE);
+        Ok(())
     }
 
     /// Read COBS-encoded binary data from the Notecard's binary storage buffer
