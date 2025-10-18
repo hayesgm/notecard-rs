@@ -231,38 +231,24 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
             .wait(delay)
             .await?;
 
-        debug!("card.binary.put acknowledged, writing {} bytes using Serial-over-I2C protocol...", cobs_data.len());
+        debug!("card.binary.put acknowledged, writing {} bytes (raw binary protocol)...", cobs_data.len());
 
-        // Write binary data using the same Serial-over-I2C chunking protocol as JSON
-        // Each chunk: [length_byte][data...] with delays between chunks
-        const CHUNK_SIZE: usize = 30;  // Same as JSON requests
-        const CHUNK_DELAY: u32 = 20;   // milliseconds
+        // Binary data uses RAW I2C writes (no Serial-over-I2C length prefix!)
+        // Per note-c implementation: chunk to I2C MTU size with NO delays
+        // NOTE_I2C_MAX_MAX = UCHAR_MAX - NOTE_I2C_HEADER_SIZE = 255 - 2 = 253
+        const CHUNK_SIZE: usize = 253;
 
-        let mut chunk_buf: heapless::Vec<u8, 31> = heapless::Vec::new();  // length + data
         let mut bytes_sent = 0;
 
         for chunk in cobs_data.chunks(CHUNK_SIZE) {
-            chunk_buf.clear();
-
-            // Prepend length byte (Serial-over-I2C protocol)
-            chunk_buf.push(chunk.len() as u8).unwrap();
-            chunk_buf.extend_from_slice(chunk).unwrap();
-
-            trace!("Writing binary chunk: {} bytes at offset {}", chunk.len(), bytes_sent);
-
-            // Write chunk with length prefix
-            self.note.i2c.write(self.note.addr, &chunk_buf).await
+            // Raw I2C write - NO length prefix, NO delays
+            self.note.i2c.write(self.note.addr, chunk).await
                 .map_err(|_| {
-                    error!("Binary chunk write failed at offset {}", bytes_sent);
+                    error!("Binary write failed at offset {}", bytes_sent);
                     NoteError::I2cWriteError
                 })?;
 
             bytes_sent += chunk.len();
-
-            // Delay between chunks (same as JSON protocol)
-            if bytes_sent < cobs_data.len() {
-                delay.delay_ms(CHUNK_DELAY).await;
-            }
         }
 
         debug!("Binary data write complete: {} bytes in {} chunks",
