@@ -214,58 +214,59 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
         mut self,
         delay: &mut impl DelayNs,
         cobs_data: &[u8],
-        base_offset: usize,
+        offset: usize,
     ) -> Result<(), NoteError> {
-        // Fragment large binary data to avoid overwhelming Notecard's I2C receiver buffer.
-        // The Notecard API is designed for fragmentation - the 'offset' parameter is
-        // "primarily used when sending multiple fragments of one binary payload."
-        // Empirically, even 2KB fragments timeout - the Notecard's I2C RX buffer
-        // appears to be much smaller. Using 256 bytes to match common I2C buffer sizes.
-        const FRAGMENT_SIZE: usize = 256;  // 256 byte fragments
+        // Send card.binary.put request
+        self.note.request(
+            delay,
+            req::BinaryPut {
+                req: "card.binary.put",
+                cobs: cobs_data.len(),
+                offset: Some(offset),
+            },
+        ).await?;
 
-        let total_len = cobs_data.len();
-        let mut fragment_offset = 0;
+        // Wait for ack
+        FutureResponse::<res::Empty, _, _>::from(&mut *self.note)
+            .wait(delay)
+            .await?;
 
-        debug!("Fragmenting {} bytes into {} byte chunks...", total_len, FRAGMENT_SIZE);
+        debug!("card.binary.put acknowledged, writing {} bytes using Serial-over-I2C protocol...", cobs_data.len());
 
-        while fragment_offset < total_len {
-            let remaining = total_len - fragment_offset;
-            let fragment_len = remaining.min(FRAGMENT_SIZE);
-            let fragment = &cobs_data[fragment_offset..fragment_offset + fragment_len];
-            let notecard_offset = base_offset + fragment_offset;
+        // Write binary data using the same Serial-over-I2C chunking protocol as JSON
+        // Each chunk: [length_byte][data...] with delays between chunks
+        const CHUNK_SIZE: usize = 30;  // Same as JSON requests
+        const CHUNK_DELAY: u32 = 20;   // milliseconds
 
-            debug!("Fragment: offset={}, size={}", notecard_offset, fragment_len);
+        let mut chunk_buf: heapless::Vec<u8, 31> = heapless::Vec::new();  // length + data
+        let mut bytes_sent = 0;
 
-            // Send card.binary.put for this fragment
-            self.note.request(
-                delay,
-                req::BinaryPut {
-                    req: "card.binary.put",
-                    cobs: fragment_len,
-                    offset: Some(notecard_offset),
-                },
-            ).await?;
+        for chunk in cobs_data.chunks(CHUNK_SIZE) {
+            chunk_buf.clear();
 
-            // Wait for ack
-            FutureResponse::<res::Empty, _, _>::from(&mut *self.note)
-                .wait(delay)
-                .await?;
+            // Prepend length byte (Serial-over-I2C protocol)
+            chunk_buf.push(chunk.len() as u8).unwrap();
+            chunk_buf.extend_from_slice(chunk).unwrap();
 
-            // Small delay for Notecard to prepare buffer
-            delay.delay_ms(5).await;
+            trace!("Writing binary chunk: {} bytes at offset {}", chunk.len(), bytes_sent);
 
-            // Write this fragment's data
-            self.note.i2c.write(self.note.addr, fragment).await
+            // Write chunk with length prefix
+            self.note.i2c.write(self.note.addr, &chunk_buf).await
                 .map_err(|_| {
-                    error!("Fragment write failed at offset {}", notecard_offset);
+                    error!("Binary chunk write failed at offset {}", bytes_sent);
                     NoteError::I2cWriteError
                 })?;
 
-            fragment_offset += fragment_len;
+            bytes_sent += chunk.len();
+
+            // Delay between chunks (same as JSON protocol)
+            if bytes_sent < cobs_data.len() {
+                delay.delay_ms(CHUNK_DELAY).await;
+            }
         }
 
-        debug!("Binary data transfer complete: {} bytes in {} fragments",
-            total_len, (total_len + FRAGMENT_SIZE - 1) / FRAGMENT_SIZE);
+        debug!("Binary data write complete: {} bytes in {} chunks",
+            bytes_sent, (cobs_data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE);
         Ok(())
     }
 
