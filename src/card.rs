@@ -209,13 +209,14 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
     /// * `offset` - Byte offset in the buffer to start writing (0-based)
     ///
     /// Note: The data must already be COBS-encoded before calling this function
+    /// This method waits for the Notecard to acknowledge before writing data
     pub async fn binary_put(
-        self,
+        mut self,
         delay: &mut impl DelayNs,
         cobs_data: &[u8],
         offset: usize,
-    ) -> Result<FutureResponse<'a, res::Empty, IOM, BS>, NoteError> {
-        // Send JSON request first
+    ) -> Result<(), NoteError> {
+        // Send JSON request
         self.note.request(
             delay,
             req::BinaryPut {
@@ -225,12 +226,17 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
             },
         ).await?;
 
-        // Immediately follow with binary data (no newline!)
+        // Wait for the Notecard to acknowledge the request
+        FutureResponse::<res::Empty, _, _>::from(&mut *self.note)
+            .wait(delay)
+            .await?;
+
+        // Now write the binary data after Notecard acknowledged
         self.note.i2c.write(self.note.addr, cobs_data)
             .await
             .map_err(|_| NoteError::I2cWriteError)?;
 
-        Ok(FutureResponse::from(self.note))
+        Ok(())
     }
 
     /// Read COBS-encoded binary data from the Notecard's binary storage buffer
