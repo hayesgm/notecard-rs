@@ -236,16 +236,23 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
     /// Read COBS-encoded binary data from the Notecard's binary storage buffer
     ///
     /// # Arguments
+    /// * `buffer` - Buffer to write the received data into
     /// * `offset` - Byte offset in the buffer to start reading (0-based)
     /// * `length` - Number of bytes to read
     ///
-    /// Returns the COBS-encoded data which must be decoded by the caller
+    /// Returns the COBS-encoded data in the provided buffer (avoids 66KB stack allocation)
+    /// The caller must decode the COBS data
     pub async fn binary_get(
         self,
         delay: &mut impl DelayNs,
+        buffer: &mut [u8],
         offset: usize,
         length: usize,
-    ) -> Result<heapless::Vec<u8, 66000>, NoteError> {
+    ) -> Result<(), NoteError> {
+        if length > buffer.len() {
+            return Err(NoteError::BufOverflow);
+        }
+
         // Send request
         self.note.request(
             delay,
@@ -256,14 +263,12 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
             },
         ).await?;
 
-        // Read binary response
-        let mut buffer = heapless::Vec::new();
-        buffer.resize(length, 0).map_err(|_| NoteError::BufOverflow)?;
-        self.note.i2c.read(self.note.addr, &mut buffer)
+        // Read binary response directly into provided buffer
+        self.note.i2c.read(self.note.addr, &mut buffer[..length])
             .await
             .map_err(|_| NoteError::I2cReadError)?;
 
-        Ok(buffer)
+        Ok(())
     }
 }
 
