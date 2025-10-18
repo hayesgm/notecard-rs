@@ -219,7 +219,9 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
         // Fragment large binary data to avoid overwhelming Notecard's I2C receiver buffer.
         // The Notecard API is designed for fragmentation - the 'offset' parameter is
         // "primarily used when sending multiple fragments of one binary payload."
-        const FRAGMENT_SIZE: usize = 2048;  // 2KB fragments
+        // Empirically, even 2KB fragments timeout - the Notecard's I2C RX buffer
+        // appears to be much smaller. Using 256 bytes to match common I2C buffer sizes.
+        const FRAGMENT_SIZE: usize = 256;  // 256 byte fragments
 
         let total_len = cobs_data.len();
         let mut fragment_offset = 0;
