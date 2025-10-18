@@ -231,12 +231,25 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
             .wait(delay)
             .await?;
 
-        // Now write the binary data after Notecard acknowledged
-        self.note.i2c.write(self.note.addr, cobs_data)
-            .await
-            .map_err(|_| NoteError::I2cWriteError)?;
+        debug!("card.binary.put acknowledged, writing {} bytes of COBS data...", cobs_data.len());
 
-        Ok(())
+        // Give Notecard a moment to prepare its buffer for the incoming data
+        // (empirically needed - immediate write after ack can cause timeouts)
+        delay.delay_ms(10).await;
+
+        // Now write the binary data after Notecard acknowledged
+        let write_result = self.note.i2c.write(self.note.addr, cobs_data).await;
+
+        match write_result {
+            Ok(_) => {
+                debug!("Binary data write completed successfully");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Binary data write failed after {} bytes (timeout or NAK)", cobs_data.len());
+                Err(NoteError::I2cWriteError)
+            }
+        }
     }
 
     /// Read COBS-encoded binary data from the Notecard's binary storage buffer
