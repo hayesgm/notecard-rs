@@ -240,16 +240,10 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
         const CHUNK_SIZE: usize = 253;
 
         let mut bytes_sent = 0;
+        let total_len = cobs_data.len() + 1;  // +1 for newline
 
-        // Append newline to mark end of packet
-        let mut data_with_newline = heapless::Vec::<u8, 66000>::new();
-        data_with_newline.extend_from_slice(cobs_data).map_err(|_| NoteError::BufOverflow)?;
-        data_with_newline.push(b'\n').map_err(|_| NoteError::BufOverflow)?;
-
-        let total_len = data_with_newline.len();
-
-        // Send all chunks using Serial-over-I2C protocol (with length prefix)
-        for chunk in data_with_newline.chunks(CHUNK_SIZE) {
+        // Send all chunks of COBS data using Serial-over-I2C protocol (with length prefix)
+        for chunk in cobs_data.chunks(CHUNK_SIZE) {
             // Prepare buffer with length prefix: [length_byte][data]
             let mut write_buf = heapless::Vec::<u8, 254>::new();
             write_buf.push(chunk.len() as u8).map_err(|_| NoteError::BufOverflow)?;
@@ -264,6 +258,14 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
 
             bytes_sent += chunk.len();
         }
+
+        // Send the final newline as a separate chunk with length prefix
+        let newline_chunk = [1u8, b'\n'];  // [length=1, '\n']
+        self.note.i2c.write(self.note.addr, &newline_chunk).await
+            .map_err(|_| {
+                error!("Failed to write binary terminator newline");
+                NoteError::I2cWriteError
+            })?;
 
         debug!("Binary data write complete: {} bytes in {} chunks",
             total_len, (total_len + CHUNK_SIZE - 1) / CHUNK_SIZE);
