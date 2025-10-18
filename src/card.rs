@@ -254,7 +254,7 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
             write_buf.push(CHUNK_SIZE as u8).map_err(|_| NoteError::BufOverflow)?;
             write_buf.extend_from_slice(chunk).map_err(|_| NoteError::BufOverflow)?;
 
-            // Write with NO delay (per note-c: delay=false for binary)
+            // Write chunk
             self.note.i2c.write(self.note.addr, &write_buf).await
                 .map_err(|_| {
                     error!("Binary write failed at offset {}", bytes_sent);
@@ -262,6 +262,10 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
                 })?;
 
             bytes_sent += CHUNK_SIZE;
+
+            // Small delay to let Notecard process the chunk
+            // Note-c uses delay=false but function overhead may provide implicit delay
+            delay.delay_ms(1).await;
         }
 
         // Send final chunk with remaining COBS data + newline
