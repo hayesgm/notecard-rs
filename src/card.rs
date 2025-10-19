@@ -225,6 +225,7 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
         delay: &mut impl DelayNs,
         cobs_data: &[u8],
         offset: usize,
+        md5: Option<&str>,
     ) -> Result<(), NoteError> {
         // Send card.binary.put request
         self.note.request(
@@ -233,6 +234,7 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
                 req: "card.binary.put",
                 cobs: cobs_data.len(),
                 offset: Some(offset),
+                status: md5.map(|s| heapless::String::try_from(s).unwrap_or_default()),
             },
         ).await?;
 
@@ -480,6 +482,10 @@ pub mod req {
 
         #[serde(skip_serializing_if = "Option::is_none")]
         pub offset: Option<usize>,
+
+        /// MD5 checksum of the raw data (before COBS encoding) for integrity verification
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub status: Option<heapless::String<32>>,
     }
 
     #[derive(Deserialize, Serialize, defmt::Format, Default)]
