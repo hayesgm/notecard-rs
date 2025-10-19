@@ -147,6 +147,16 @@ impl<'a, IOM: I2c, const BS: usize> Card<'a, IOM, BS> {
         Ok(FutureResponse::from(self.note))
     }
 
+    /// Returns WiFi configuration and status information for WiFi-enabled Notecards.
+    pub async fn wifi(
+        self,
+        delay: &mut impl DelayNs,
+    ) -> Result<FutureResponse<'a, res::Wifi, IOM, BS>, NoteError> {
+        self.note
+            .request_raw(delay, b"{\"req\":\"card.wifi\"}\n").await?;
+        Ok(FutureResponse::from(self.note))
+    }
+
     /// Configure Notecard Outboard Firmware Update feature
     /// Added in v3.5.1 Notecard Firmware.
     pub async fn dfu(
@@ -603,6 +613,24 @@ pub mod res {
         pub board: heapless::String<24>,
         pub sku: heapless::String<24>,
         pub api: u16,
+    }
+
+    #[derive(Deserialize, defmt::Format)]
+    pub struct Wifi {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub status: Option<heapless::String<256>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub ssid: Option<heapless::String<64>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub count: Option<u32>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub mode: Option<heapless::String<64>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub connected: Option<bool>,
     }
 
     #[derive(Deserialize, defmt::Format)]
